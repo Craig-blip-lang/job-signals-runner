@@ -1,4 +1,15 @@
-      - name: Debug - show if secrets exist (safe)
+import os
+
+def env(name: str) -> str:
+    v = os.getenv(name, "")
+    return v.strip()  # <-- removes hidden spaces/newlines
+
+APIFY_TOKEN = env("APIFY_TOKEN")
+SUPABASE_URL = env("SUPABASE_URL")
+SUPABASE_SERVICE_KEY = env("SUPABASE_SERVICE_KEY")
+
+
+- name: Debug - show if secrets exist (safe)
         run: |
           echo "Has APIFY_TOKEN? ${{ secrets.APIFY_TOKEN != '' }}"
           echo "Has SUPABASE_URL? ${{ secrets.SUPABASE_URL != '' }}"
