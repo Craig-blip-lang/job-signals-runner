@@ -58,7 +58,7 @@ SUPABASE_SERVICE_KEY = env("SUPABASE_SERVICE_KEY")
         run: |
           echo "Has APIFY_TOKEN? ${{ secrets.APIFY_TOKEN != '' }}"
           echo "Has SUPABASE_URL? ${{ secrets.SUPABASE_URL != '' }}"
-          echo "Has SUPABASE_SERVICE_KEY? ${{ secrets.SUPABASE_SERVICE_KEY != '' }}"
+          echo "Has SUPABASE_SERVICE_KEY? ${{ secrets.SUPABASE_SERVICE_KEY_B64 != '' }}"
 
 
 import os
@@ -70,7 +70,7 @@ from dateutil.parser import isoparse
 
 APIFY_TOKEN = os.getenv("APIFY_TOKEN")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
+SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY_B64")
 
 # Apify actors (from Apify API docs)
 CAREER_SITE_ACTOR = "fantastic-jobs~career-site-job-listing-api"
@@ -84,7 +84,7 @@ INCLUDE_LINKEDIN = os.getenv("INCLUDE_LINKEDIN", "false").lower() == "true"
 
 HEADERS_SUPABASE = {
     "apikey": SUPABASE_SERVICE_KEY,
-    "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+    "Authorization": f"Bearer {SUPABASE_SERVICE_KEY_B64}",
     "Content-Type": "application/json",
 }
 
@@ -92,7 +92,7 @@ def die(msg: str):
     raise SystemExit(msg)
 
 def ensure_env():
-    missing = [k for k in ["APIFY_TOKEN", "SUPABASE_URL", "SUPABASE_SERVICE_KEY"] if not os.getenv(k)]
+    missing = [k for k in ["APIFY_TOKEN", "SUPABASE_URL", "SUPABASE_SERVICE_KEY_B64"] if not os.getenv(k)]
     if missing:
         die(f"Missing env vars: {', '.join(missing)}")
 
