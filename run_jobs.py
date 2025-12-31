@@ -1,4 +1,49 @@
 import os
+import time
+import hashlib
+import base64
+import requests
+from datetime import datetime, timezone
+from dateutil.parser import isoparse
+
+def env(name: str, default: str = "") -> str:
+    """Read env var safely and strip whitespace/newlines."""
+    return (os.getenv(name, default) or "").strip()
+
+APIFY_TOKEN = env("APIFY_TOKEN")
+SUPABASE_URL = env("SUPABASE_URL")
+
+# ✅ Use base64 key to avoid hidden newline/header issues
+SUPABASE_SERVICE_KEY_B64 = env("SUPABASE_SERVICE_KEY_B64")
+SUPABASE_SERVICE_KEY = base64.b64decode(SUPABASE_SERVICE_KEY_B64).decode("utf-8").strip()
+
+# Apify actors
+CAREER_SITE_ACTOR = "fantastic-jobs~career-site-job-listing-api"
+EXPIRED_ACTOR = "fantastic-jobs~expired-jobs-api-for-career-site-job-listing-api"
+
+# Tune these
+TIME_RANGE = env("TIME_RANGE", "24h")         # "1h", "24h", "7d"
+MAX_JOBS_PER_COMPANY = int(env("MAX_JOBS", "500"))
+INCLUDE_AI = env("INCLUDE_AI", "false").lower() == "true"
+INCLUDE_LINKEDIN = env("INCLUDE_LINKEDIN", "false").lower() == "true"
+
+HEADERS_SUPABASE = {
+    "apikey": SUPABASE_SERVICE_KEY,
+    "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+    "Content-Type": "application/json",
+}
+
+def die(msg: str):
+    raise SystemExit(msg)
+
+def ensure_env():
+    # ✅ match the new secret names
+    missing = [k for k in ["APIFY_TOKEN", "SUPABASE_URL", "SUPABASE_SERVICE_KEY_B64"] if not env(k)]
+    if missing:
+        die(f"Missing env vars: {', '.join(missing)}")
+
+
+import os
 
 def env(name: str) -> str:
     v = os.getenv(name, "")
