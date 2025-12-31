@@ -1,3 +1,10 @@
+      - name: Debug - show if secrets exist (safe)
+        run: |
+          echo "Has APIFY_TOKEN? ${{ secrets.APIFY_TOKEN != '' }}"
+          echo "Has SUPABASE_URL? ${{ secrets.SUPABASE_URL != '' }}"
+          echo "Has SUPABASE_SERVICE_KEY? ${{ secrets.SUPABASE_SERVICE_KEY != '' }}"
+
+
 import os
 import time
 import hashlib
