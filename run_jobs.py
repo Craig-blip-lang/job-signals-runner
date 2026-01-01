@@ -1,10 +1,14 @@
 import os
 import time
-import hashlib
 import uuid
 import requests
 from datetime import datetime, timezone
 from dateutil.parser import isoparse
+
+
+# ---- DEBUG: prove which file + commit is running ----
+print("RUNNING FILE:", os.path.abspath(__file__))
+print("GITHUB_SHA:", os.getenv("GITHUB_SHA", "(not set)"))
 
 
 def env(name: str, default: str = "") -> str:
@@ -14,18 +18,14 @@ def env(name: str, default: str = "") -> str:
 
 APIFY_TOKEN = env("APIFY_TOKEN")
 SUPABASE_URL = env("SUPABASE_URL")
-
-# ✅ Use raw Supabase service key directly (do NOT base64 decode)
 SUPABASE_SERVICE_KEY = env("SUPABASE_SERVICE_KEY")
 
-# ✅ job_posts primary key column name in Supabase
 JOB_ID_COL = "id"
 
-# Apify actors (we will NOT use EXPIRED_ACTOR anymore)
+# ✅ ONLY ONE Apify actor: the free one
 CAREER_SITE_ACTOR = "fantastic-jobs~career-site-job-listing-api"
 
-# Tune these
-TIME_RANGE = env("TIME_RANGE", "24h")  # "1h", "24h", "7d"
+TIME_RANGE = env("TIME_RANGE", "24h")
 MAX_JOBS_PER_COMPANY = int(env("MAX_JOBS", "500"))
 INCLUDE_AI = env("INCLUDE_AI", "false").lower() == "true"
 INCLUDE_LINKEDIN = env("INCLUDE_LINKEDIN", "false").lower() == "true"
@@ -50,7 +50,6 @@ def ensure_env():
 def apify_run_sync_get_items(actor: str, actor_input: dict, timeout_s: int = 180) -> list:
     url = f"https://api.apify.com/v2/acts/{actor}/run-sync-get-dataset-items"
     params = {"token": APIFY_TOKEN, "timeout": str(timeout_s)}
-
     r = requests.post(url, params=params, json=actor_input, timeout=timeout_s + 30)
 
     if not r.ok:
@@ -65,7 +64,7 @@ def apify_run_sync_get_items(actor: str, actor_input: dict, timeout_s: int = 180
     return r.json()
 
 
-def supabase_get_active_job_uids(company: str) -> set[str]:
+def supabase_get_active_job_ids(company: str) -> set[str]:
     url = f"{SUPABASE_URL}/rest/v1/job_posts"
     params = {
         "select": JOB_ID_COL,
@@ -73,16 +72,13 @@ def supabase_get_active_job_uids(company: str) -> set[str]:
         "is_active": "eq.true",
         "limit": "10000",
     }
-
     r = requests.get(url, headers=HEADERS_SUPABASE, params=params, timeout=60)
-
     if not r.ok:
         print("Supabase GET failed")
         print("Status code:", r.status_code)
         print("Request URL:", r.url)
         print("Response body:", r.text[:1000])
         r.raise_for_status()
-
     return {str(row[JOB_ID_COL]) for row in r.json()}
 
 
@@ -94,18 +90,16 @@ def supabase_upsert_job_posts(rows: list[dict]) -> list[dict]:
     headers = dict(HEADERS_SUPABASE)
     headers["Prefer"] = "resolution=merge-duplicates,return=representation"
 
-    # ✅ Merge on PRIMARY KEY id (unique)
+    # upsert based on PRIMARY KEY id
     params = {"on_conflict": JOB_ID_COL}
 
     r = requests.post(url, headers=headers, params=params, json=rows, timeout=120)
-
     if not r.ok:
         print("Supabase UPSERT failed")
         print("Status code:", r.status_code)
         print("Response body:", r.text[:2000])
         print("Example row keys:", sorted(list(rows[0].keys())) if rows else [])
         r.raise_for_status()
-
     return r.json()
 
 
@@ -119,16 +113,14 @@ def _extract_missing_column_name(resp_text: str) -> str | None:
 
 
 def _prune_rows(rows: list[dict], drop_key: str) -> list[dict]:
-    if not rows:
-        return rows
     return [{k: v for k, v in r.items() if k != drop_key} for r in rows]
 
 
 def supabase_insert_signals(rows: list[dict]) -> None:
     """
     Best-effort insert:
-    - If a column doesn't exist in your signals table, we drop it and retry.
-    - If it still fails, we print a warning but DO NOT break the run.
+    - If your signals table is missing a column, drop it and retry.
+    - Never crash the job because of signals schema mismatch.
     """
     if not rows:
         return
@@ -138,7 +130,7 @@ def supabase_insert_signals(rows: list[dict]) -> None:
     headers["Prefer"] = "return=minimal"
 
     working = rows
-    for _attempt in range(0, 10):
+    for _ in range(10):
         r = requests.post(url, headers=headers, json=working, timeout=120)
         if r.ok:
             return
@@ -159,14 +151,8 @@ def supabase_mark_inactive(company: str, job_ids: list[str]) -> None:
         return
     url = f"{SUPABASE_URL}/rest/v1/job_posts"
     in_list = ",".join(job_ids)
-    params = {
-        "company": f"eq.{company}",
-        JOB_ID_COL: f"in.({in_list})",
-    }
-    patch = {
-        "is_active": False,
-        "last_seen_at": datetime.now(timezone.utc).isoformat(),
-    }
+    params = {"company": f"eq.{company}", JOB_ID_COL: f"in.({in_list})"}
+    patch = {"is_active": False, "last_seen_at": datetime.now(timezone.utc).isoformat()}
     r = requests.patch(url, headers=HEADERS_SUPABASE, params=params, json=patch, timeout=120)
     r.raise_for_status()
 
@@ -184,7 +170,7 @@ def map_job_item_to_row(company: str, item: dict) -> dict:
     job_id = item.get("id")
     job_url = item.get("url") or ""
 
-    # ✅ Stable UUID (matches across runs)
+    # Stable UUID across runs
     seed = f"{company}::{job_id or job_url}"
     uid = str(uuid.uuid5(uuid.NAMESPACE_URL, seed))
 
@@ -201,7 +187,7 @@ def map_job_item_to_row(company: str, item: dict) -> dict:
     now = datetime.now(timezone.utc).isoformat()
     return {
         "id": uid,
-        "job_uid": uid,  # ✅ required by your DB (NOT NULL)
+        "job_uid": uid,  # NOT NULL in your DB
         "company": company,
         "title": item.get("title") or "(no title)",
         "location": loc,
@@ -216,13 +202,11 @@ def build_new_job_signal(company: str, job_row: dict) -> dict:
     title = job_row["title"]
     loc = job_row.get("location")
     job_id = str(job_row.get("job_uid") or job_row[JOB_ID_COL])
-
-    # We'll send a few common fields; unknown columns get dropped automatically.
     return {
-        "account_name": company,   # may not exist
-        "company": company,        # may exist
-        "signal_type": "NEW_JOB",  # may not exist
-        "type": "NEW_JOB",         # may exist
+        "account_name": company,   # might not exist; will be dropped if missing
+        "company": company,
+        "signal_type": "NEW_JOB",
+        "type": "NEW_JOB",
         "title": f"{company} posted: {title}" + (f" ({loc})" if loc else ""),
         "occurred_at": datetime.now(timezone.utc).isoformat(),
         "strength_score": 40,
@@ -235,10 +219,10 @@ def build_new_job_signal(company: str, job_row: dict) -> dict:
 def build_removed_job_signal(company: str, job_id: str) -> dict:
     job_id = str(job_id)
     return {
-        "account_name": company,        # may not exist
-        "company": company,             # may exist
-        "signal_type": "JOB_REMOVED",   # may not exist
-        "type": "JOB_REMOVED",          # may exist
+        "account_name": company,
+        "company": company,
+        "signal_type": "JOB_REMOVED",
+        "type": "JOB_REMOVED",
         "title": f"{company} job removed: {job_id}",
         "occurred_at": datetime.now(timezone.utc).isoformat(),
         "strength_score": 25,
@@ -255,7 +239,7 @@ def load_companies() -> list[str]:
 
 def fetch_new_jobs_for_company(company: str) -> list[dict]:
     actor_input = {
-        "organizationSearch": [company],  # ✅ MUST be an array
+        "organizationSearch": [company],  # MUST be array
         "timeRange": TIME_RANGE,
         "maximumJobs": MAX_JOBS_PER_COMPANY,
         "includeAi": INCLUDE_AI,
@@ -277,28 +261,20 @@ def main():
     for company in companies:
         print(f"\n=== {company} ===")
 
-        # What was active before
-        existing_active = supabase_get_active_job_uids(company)
+        existing_active = supabase_get_active_job_ids(company)
         print(f"Existing active jobs: {len(existing_active)}")
 
-        # What we see now
         items = fetch_new_jobs_for_company(company)
         print(f"Fetched items: {len(items)}")
 
         mapped_rows = [map_job_item_to_row(company, it) for it in items]
-
-        # Safety: job_uid must exist
-        for r in mapped_rows:
-            if "job_uid" not in r or not r["job_uid"]:
-                r["job_uid"] = r["id"]
-
         print("Row keys check:", sorted(mapped_rows[0].keys()) if mapped_rows else [])
 
         upserted = supabase_upsert_job_posts(mapped_rows)
         total_jobs_upserted += len(upserted)
         print(f"Upserted rows: {len(upserted)}")
 
-        # NEW jobs = in today's fetch but not previously active
+        # NEW jobs
         current_ids = {str(r[JOB_ID_COL]) for r in mapped_rows}
         new_rows = [r for r in mapped_rows if str(r[JOB_ID_COL]) not in existing_active]
         new_signals = [build_new_job_signal(company, r) for r in new_rows]
@@ -306,7 +282,7 @@ def main():
         total_new_signals += len(new_signals)
         print(f"NEW_JOB signals: {len(new_signals)}")
 
-        # REMOVED jobs (free method) = previously active but missing today
+        # REMOVED jobs (diff method, free)
         removed_ids = sorted(existing_active - current_ids)
         if removed_ids:
             BATCH = 200
