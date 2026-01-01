@@ -21,7 +21,6 @@ SUPABASE_SERVICE_KEY = env("SUPABASE_SERVICE_KEY")
 # ✅ job_posts primary key column name in Supabase
 JOB_ID_COL = "id"
 
-
 # Apify actors
 CAREER_SITE_ACTOR = "fantastic-jobs~career-site-job-listing-api"
 EXPIRED_ACTOR = "fantastic-jobs~expired-jobs-api-for-career-site-job-listing-api"
@@ -67,7 +66,6 @@ def apify_run_sync_get_items(actor: str, actor_input: dict, timeout_s: int = 180
     return r.json()
 
 
-
 def supabase_get_active_job_uids(company: str) -> set[str]:
     url = f"{SUPABASE_URL}/rest/v1/job_posts"
     params = {
@@ -97,22 +95,18 @@ def supabase_upsert_job_posts(rows: list[dict]) -> list[dict]:
     headers = dict(HEADERS_SUPABASE)
     headers["Prefer"] = "resolution=merge-duplicates,return=representation"
 
-    r = requests.post(url, headers=headers, json=rows, timeout=120)
+    # ✅ ensure merge happens on job_posts.id
+    params = {"on_conflict": JOB_ID_COL}
+
+    r = requests.post(url, headers=headers, params=params, json=rows, timeout=120)
 
     if not r.ok:
         print("Supabase UPSERT failed")
         print("Status code:", r.status_code)
-        print("Response body:", r.text[:2000])  # <-- This is the key line
+        print("Response body:", r.text[:2000])
         print("Example row keys:", sorted(list(rows[0].keys())) if rows else [])
         r.raise_for_status()
 
-    return r.json()
-
-    url = f"{SUPABASE_URL}/rest/v1/job_posts"
-    headers = dict(HEADERS_SUPABASE)
-    headers["Prefer"] = "resolution=merge-duplicates,return=representation"
-    r = requests.post(url, headers=headers, json=rows, timeout=120)
-    r.raise_for_status()
     return r.json()
 
 
@@ -124,7 +118,7 @@ def supabase_insert_signals(rows: list[dict]) -> None:
     headers["Prefer"] = "return=minimal"
     r = requests.post(url, headers=headers, json=rows, timeout=120)
     if r.status_code in (409, 400):
-        print("Signal insert warning:", r.text[:300])
+        print("Signal insert warning:", r.text[:500])
         return
     r.raise_for_status()
 
@@ -164,7 +158,7 @@ def map_job_item_to_row(company: str, item: dict) -> dict:
     job_id = item.get("id")
     job_url = item.get("url") or ""
 
-    # ✅ Create a stable UUID (required because Supabase id column is UUID)
+    # ✅ Stable UUID (Supabase job_posts.id is uuid)
     seed = f"{company}::{job_id or job_url}"
     uid = str(uuid.uuid5(uuid.NAMESPACE_URL, seed))
 
@@ -180,7 +174,7 @@ def map_job_item_to_row(company: str, item: dict) -> dict:
 
     now = datetime.now(timezone.utc).isoformat()
     return {
-        "id": uid,                 # ← UUID goes into job_posts.id
+        "id": uid,
         "company": company,
         "title": item.get("title") or "(no title)",
         "location": loc,
@@ -188,8 +182,11 @@ def map_job_item_to_row(company: str, item: dict) -> dict:
         "first_seen_at": now,
         "last_seen_at": now,
         "is_active": True,
+        # If your table has posted_at later, you can re-add it:
+        # "posted_at": safe_dt(item.get("date_posted")),
+        # If your table has metadata later, you can re-add it:
+        # "metadata": {...},
     }
-
 
 
 def build_new_job_signal(company: str, job_row: dict) -> dict:
@@ -203,11 +200,9 @@ def build_new_job_signal(company: str, job_row: dict) -> dict:
         "title": f"{company} posted: {title}" + (f" ({loc})" if loc else ""),
         "occurred_at": datetime.now(timezone.utc).isoformat(),
         "strength_score": 40,
-        "source_url": job_row.get("source_url"),
+        "source_url": None,
         "metadata": {"job_id": job_id, "title": title, "location": loc},
-        # keep these if your signals table includes them
         "job_uid": job_id,
-        "id": job_id,  # harmless if signals has id; remove if it errors
     }
 
 
@@ -222,7 +217,6 @@ def build_removed_job_signal(company: str, job_id: str) -> dict:
         "source_url": None,
         "metadata": {"job_id": job_id},
         "job_uid": job_id,
-        "id": job_id,  # harmless if signals has id; remove if it errors
     }
 
 
@@ -286,7 +280,13 @@ def main():
         for it in expired_items:
             jid = it.get("id")
             if jid is not None:
-                expired_ids.append(str(jid))
+                # These ids from Apify are NOT UUIDs; we can't use them directly.
+                # But your expired actor likely returns the same "id" that was used in seed above.
+                # We must regenerate the UUID using same seed logic:
+                job_url = it.get("url") or ""
+                seed = f"{company}::{jid or job_url}"
+                expired_ids.append(str(uuid.uuid5(uuid.NAMESPACE_URL, seed)))
+
         expired_ids = sorted(set(expired_ids))
 
         if expired_ids:
