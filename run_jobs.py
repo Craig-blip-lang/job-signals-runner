@@ -173,16 +173,16 @@ def map_job_item_to_row(company: str, item: dict) -> dict:
         loc = ", ".join(parts) if parts else None
 
     now = datetime.now(timezone.utc).isoformat()
-    return {
-        "id": uid,
-        "job_uid": uid,   # ✅ satisfy NOT NULL constraint (use same UUID)
-        "company": company,
-        "title": item.get("title") or "(no title)",
-        "location": loc,
-        "country": (countries[0] if countries else None),
-        "first_seen_at": now,
-        "last_seen_at": now,
-        "is_active": True,
+return {
+    "id": uid,
+    "job_uid": uid,   # ✅ required by your DB (NOT NULL)
+    "company": company,
+    "title": item.get("title") or "(no title)",
+    "location": loc,
+    "country": (countries[0] if countries else None),
+    "first_seen_at": now,
+    "last_seen_at": now,
+    "is_active": True,
         # If your table has posted_at later, you can re-add it:
         # "posted_at": safe_dt(item.get("date_posted")),
         # If your table has metadata later, you can re-add it:
