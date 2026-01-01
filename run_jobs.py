@@ -175,6 +175,7 @@ def map_job_item_to_row(company: str, item: dict) -> dict:
     now = datetime.now(timezone.utc).isoformat()
     return {
         "id": uid,
+        "job_uid": uid,   # ✅ satisfy NOT NULL constraint (use same UUID)
         "company": company,
         "title": item.get("title") or "(no title)",
         "location": loc,
