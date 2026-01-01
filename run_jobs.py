@@ -17,6 +17,9 @@ SUPABASE_URL = env("SUPABASE_URL")
 # ✅ Use raw Supabase service key directly (do NOT base64 decode)
 SUPABASE_SERVICE_KEY = env("SUPABASE_SERVICE_KEY")
 
+# ✅ job_posts primary key column name in Supabase
+JOB_ID_COL = "id"
+
 
 # Apify actors
 CAREER_SITE_ACTOR = "fantastic-jobs~career-site-job-listing-api"
@@ -45,7 +48,6 @@ def ensure_env():
         die(f"Missing env vars: {', '.join(missing)}")
 
 
-
 def apify_run_sync_get_items(actor: str, actor_input: dict, timeout_s: int = 180) -> list:
     url = f"https://api.apify.com/v2/acts/{actor}/run-sync-get-dataset-items"
     params = {"token": APIFY_TOKEN, "timeout": str(timeout_s)}
@@ -57,7 +59,7 @@ def apify_run_sync_get_items(actor: str, actor_input: dict, timeout_s: int = 180
 def supabase_get_active_job_uids(company: str) -> set[str]:
     url = f"{SUPABASE_URL}/rest/v1/job_posts"
     params = {
-        "select": "job_uid",
+        "select": JOB_ID_COL,
         "company": f"eq.{company}",
         "is_active": "eq.true",
         "limit": "10000",
@@ -72,7 +74,7 @@ def supabase_get_active_job_uids(company: str) -> set[str]:
         print("Response body:", r.text[:1000])
         r.raise_for_status()
 
-    return {row["job_uid"] for row in r.json()}
+    return {str(row[JOB_ID_COL]) for row in r.json()}
 
 
 def supabase_upsert_job_posts(rows: list[dict]) -> list[dict]:
@@ -100,14 +102,14 @@ def supabase_insert_signals(rows: list[dict]) -> None:
     r.raise_for_status()
 
 
-def supabase_mark_inactive(company: str, job_uids: list[str]) -> None:
-    if not job_uids:
+def supabase_mark_inactive(company: str, job_ids: list[str]) -> None:
+    if not job_ids:
         return
     url = f"{SUPABASE_URL}/rest/v1/job_posts"
-    in_list = ",".join(job_uids)
+    in_list = ",".join(job_ids)
     params = {
         "company": f"eq.{company}",
-        "job_uid": f"in.({in_list})",
+        JOB_ID_COL: f"in.({in_list})",
     }
     patch = {
         "is_active": False,
@@ -134,7 +136,7 @@ def fallback_uid(company: str, job_url: str) -> str:
 def map_job_item_to_row(company: str, item: dict) -> dict:
     job_id = item.get("id")
     job_url = item.get("url") or ""
-    job_uid = str(job_id) if job_id is not None else fallback_uid(company, job_url)
+    uid = str(job_id) if job_id is not None else fallback_uid(company, job_url)
 
     loc = None
     countries = item.get("countries_derived") or []
@@ -148,7 +150,7 @@ def map_job_item_to_row(company: str, item: dict) -> dict:
 
     now = datetime.now(timezone.utc).isoformat()
     return {
-        "job_uid": job_uid,
+        JOB_ID_COL: uid,  # <-- store unique id in job_posts.id
         "company": company,
         "source": "fantastic_jobs_apify",
         "source_url": job_url,
@@ -178,6 +180,8 @@ def map_job_item_to_row(company: str, item: dict) -> dict:
 def build_new_job_signal(company: str, job_row: dict) -> dict:
     title = job_row["title"]
     loc = job_row.get("location")
+    job_id = str(job_row[JOB_ID_COL])
+
     return {
         "account_name": company,
         "signal_type": "NEW_JOB",
@@ -185,21 +189,25 @@ def build_new_job_signal(company: str, job_row: dict) -> dict:
         "occurred_at": datetime.now(timezone.utc).isoformat(),
         "strength_score": 40,
         "source_url": job_row.get("source_url"),
-        "metadata": {"job_uid": job_row["job_uid"], "title": title, "location": loc},
-        "job_uid": job_row["job_uid"],
+        "metadata": {"job_id": job_id, "title": title, "location": loc},
+        # keep these if your signals table includes them
+        "job_uid": job_id,
+        "id": job_id,  # harmless if signals has id; remove if it errors
     }
 
 
-def build_removed_job_signal(company: str, job_uid: str) -> dict:
+def build_removed_job_signal(company: str, job_id: str) -> dict:
+    job_id = str(job_id)
     return {
         "account_name": company,
         "signal_type": "JOB_REMOVED",
-        "title": f"{company} job removed/expired: {job_uid}",
+        "title": f"{company} job removed/expired: {job_id}",
         "occurred_at": datetime.now(timezone.utc).isoformat(),
         "strength_score": 25,
         "source_url": None,
-        "metadata": {"job_uid": job_uid},
-        "job_uid": job_uid,
+        "metadata": {"job_id": job_id},
+        "job_uid": job_id,
+        "id": job_id,  # harmless if signals has id; remove if it errors
     }
 
 
@@ -252,7 +260,7 @@ def main():
         total_jobs_upserted += len(upserted)
         print(f"Upserted rows: {len(upserted)}")
 
-        new_rows = [r for r in mapped_rows if r["job_uid"] not in existing_active]
+        new_rows = [r for r in mapped_rows if str(r[JOB_ID_COL]) not in existing_active]
         new_signals = [build_new_job_signal(company, r) for r in new_rows]
         supabase_insert_signals(new_signals)
         total_new_signals += len(new_signals)
