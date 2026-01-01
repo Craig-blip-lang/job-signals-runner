@@ -62,8 +62,16 @@ def supabase_get_active_job_uids(company: str) -> set[str]:
         "is_active": "eq.true",
         "limit": "10000",
     }
+
     r = requests.get(url, headers=HEADERS_SUPABASE, params=params, timeout=60)
-    r.raise_for_status()
+
+    if not r.ok:
+        print("Supabase GET failed")
+        print("Status code:", r.status_code)
+        print("Request URL:", r.url)
+        print("Response body:", r.text[:1000])
+        r.raise_for_status()
+
     return {row["job_uid"] for row in r.json()}
 
 
