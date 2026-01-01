@@ -95,8 +95,8 @@ def supabase_upsert_job_posts(rows: list[dict]) -> list[dict]:
     headers = dict(HEADERS_SUPABASE)
     headers["Prefer"] = "resolution=merge-duplicates,return=representation"
 
-    # ✅ merge on job_uid (your DB requires it and likely has UNIQUE constraint)
-    params = {"on_conflict": "job_uid"}
+    # ✅ Merge on PRIMARY KEY id (this column IS unique)
+    params = {"on_conflict": JOB_ID_COL}
 
     r = requests.post(url, headers=headers, params=params, json=rows, timeout=120)
 
