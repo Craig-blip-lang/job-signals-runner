@@ -229,7 +229,7 @@ def load_companies() -> list[str]:
 
 def fetch_new_jobs_for_company(company: str) -> list[dict]:
     actor_input = {
-        "organizationSearch": company,
+        "organizationSearch": [company],  # ✅ MUST be an array
         "timeRange": TIME_RANGE,
         "maximumJobs": MAX_JOBS_PER_COMPANY,
         "includeAi": INCLUDE_AI,
@@ -240,7 +240,7 @@ def fetch_new_jobs_for_company(company: str) -> list[dict]:
 
 def fetch_expired_jobs_for_company(company: str) -> list[dict]:
     actor_input = {
-        "organizationSearch": company,
+        "organizationSearch": [company],  # ✅ MUST be an array
         "timeRange": TIME_RANGE,
         "maximumJobs": MAX_JOBS_PER_COMPANY,
     }
