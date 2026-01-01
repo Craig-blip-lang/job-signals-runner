@@ -183,7 +183,6 @@ def map_job_item_to_row(company: str, item: dict) -> dict:
         "title": item.get("title") or "(no title)",
         "location": loc,
         "country": (countries[0] if countries else None),
-        "department": None,
         "posted_at": safe_dt(item.get("date_posted")),
         "first_seen_at": now,
         "last_seen_at": now,
