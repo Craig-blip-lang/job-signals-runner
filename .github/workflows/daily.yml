@@ -27,18 +27,18 @@ jobs:
         env:
           APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY_B64: ${{ secrets.SUPABASE_SERVICE_KEY_B64 }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: |
           if [ -z "${APIFY_TOKEN}" ]; then echo "APIFY_TOKEN is empty"; exit 1; fi
           if [ -z "${SUPABASE_URL}" ]; then echo "SUPABASE_URL is empty"; exit 1; fi
-          if [ -z "${SUPABASE_SERVICE_KEY_B64}" ]; then echo "SUPABASE_SERVICE_KEY_B64 is empty"; exit 1; fi
+          if [ -z "${SUPABASE_SERVICE_KEY}" ]; then echo "SUPABASE_SERVICE_KEY is empty"; exit 1; fi
           echo "Secrets present ✅"
 
       - name: Run job sync
         env:
           APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY_B64: ${{ secrets.SUPABASE_SERVICE_KEY_B64 }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           TIME_RANGE: "24h"
           MAX_JOBS: "500"
           INCLUDE_AI: "false"
