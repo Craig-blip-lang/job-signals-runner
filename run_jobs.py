@@ -95,6 +95,21 @@ def supabase_upsert_job_posts(rows: list[dict]) -> list[dict]:
     url = f"{SUPABASE_URL}/rest/v1/job_posts"
     headers = dict(HEADERS_SUPABASE)
     headers["Prefer"] = "resolution=merge-duplicates,return=representation"
+
+    r = requests.post(url, headers=headers, json=rows, timeout=120)
+
+    if not r.ok:
+        print("Supabase UPSERT failed")
+        print("Status code:", r.status_code)
+        print("Response body:", r.text[:2000])  # <-- This is the key line
+        print("Example row keys:", sorted(list(rows[0].keys())) if rows else [])
+        r.raise_for_status()
+
+    return r.json()
+
+    url = f"{SUPABASE_URL}/rest/v1/job_posts"
+    headers = dict(HEADERS_SUPABASE)
+    headers["Prefer"] = "resolution=merge-duplicates,return=representation"
     r = requests.post(url, headers=headers, json=rows, timeout=120)
     r.raise_for_status()
     return r.json()
