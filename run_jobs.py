@@ -1,7 +1,6 @@
 import os
 import time
 import hashlib
-import base64
 import requests
 from datetime import datetime, timezone
 from dateutil.parser import isoparse
@@ -15,12 +14,9 @@ def env(name: str, default: str = "") -> str:
 APIFY_TOKEN = env("APIFY_TOKEN")
 SUPABASE_URL = env("SUPABASE_URL")
 
-# ✅ Decode base64 Supabase service key to avoid hidden newline/header issues
-SUPABASE_SERVICE_KEY_B64 = env("SUPABASE_SERVICE_KEY_B64")
-try:
-    SUPABASE_SERVICE_KEY = base64.b64decode(SUPABASE_SERVICE_KEY_B64).decode("utf-8").strip()
-except Exception as e:
-    raise SystemExit(f"Failed to decode SUPABASE_SERVICE_KEY_B64 (is it valid base64?): {e}")
+# ✅ Use raw Supabase service key directly (do NOT base64 decode)
+SUPABASE_SERVICE_KEY = env("SUPABASE_SERVICE_KEY")
+
 
 # Apify actors
 CAREER_SITE_ACTOR = "fantastic-jobs~career-site-job-listing-api"
@@ -44,9 +40,10 @@ def die(msg: str):
 
 
 def ensure_env():
-    missing = [k for k in ["APIFY_TOKEN", "SUPABASE_URL", "SUPABASE_SERVICE_KEY_B64"] if not env(k)]
+    missing = [k for k in ["APIFY_TOKEN", "SUPABASE_URL", "SUPABASE_SERVICE_KEY"] if not env(k)]
     if missing:
         die(f"Missing env vars: {', '.join(missing)}")
+
 
 
 def apify_run_sync_get_items(actor: str, actor_input: dict, timeout_s: int = 180) -> list:
