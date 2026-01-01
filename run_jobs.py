@@ -160,12 +160,12 @@ def fallback_uid(company: str, job_url: str) -> str:
 
 
 def map_job_item_to_row(company: str, item: dict) -> dict:
-job_id = item.get("id")
-job_url = item.get("url") or ""
+    job_id = item.get("id")
+    job_url = item.get("url") or ""
 
-# Use a stable UUID based on company + external job id/url (same job -> same uuid)
-seed = f"{company}::{job_id or job_url}"
-uid = str(uuid.uuid5(uuid.NAMESPACE_URL, seed))
+    # ✅ Create a stable UUID (required because Supabase id column is UUID)
+    seed = f"{company}::{job_id or job_url}"
+    uid = str(uuid.uuid5(uuid.NAMESPACE_URL, seed))
 
     loc = None
     countries = item.get("countries_derived") or []
@@ -179,30 +179,16 @@ uid = str(uuid.uuid5(uuid.NAMESPACE_URL, seed))
 
     now = datetime.now(timezone.utc).isoformat()
     return {
-        JOB_ID_COL: uid,  # <-- store unique id in job_posts.id
+        "id": uid,                 # ← UUID goes into job_posts.id
         "company": company,
-        "source": "fantastic_jobs_apify",
-        "source_url": job_url,
         "title": item.get("title") or "(no title)",
         "location": loc,
         "country": (countries[0] if countries else None),
-        "posted_at": safe_dt(item.get("date_posted")),
         "first_seen_at": now,
         "last_seen_at": now,
         "is_active": True,
-        "metadata": {
-            "organization": item.get("organization"),
-            "source": item.get("source"),
-            "source_domain": item.get("source_domain"),
-            "source_type": item.get("source_type"),
-            "date_created": item.get("date_created"),
-            "locations_derived": item.get("locations_derived"),
-            "countries_derived": item.get("countries_derived"),
-            "remote_derived": item.get("remote_derived"),
-            "ai_taxonomies_a": item.get("ai_taxonomies_a"),
-            "ai_work_arrangement": item.get("ai_work_arrangement"),
-        },
     }
+
 
 
 def build_new_job_signal(company: str, job_row: dict) -> dict:
