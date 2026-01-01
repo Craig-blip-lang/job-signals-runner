@@ -160,9 +160,12 @@ def fallback_uid(company: str, job_url: str) -> str:
 
 
 def map_job_item_to_row(company: str, item: dict) -> dict:
-    job_id = item.get("id")
-    job_url = item.get("url") or ""
-    uid = str(job_id) if job_id is not None else fallback_uid(company, job_url)
+job_id = item.get("id")
+job_url = item.get("url") or ""
+
+# Use a stable UUID based on company + external job id/url (same job -> same uuid)
+seed = f"{company}::{job_id or job_url}"
+uid = str(uuid.uuid5(uuid.NAMESPACE_URL, seed))
 
     loc = None
     countries = item.get("countries_derived") or []
