@@ -95,7 +95,7 @@ def supabase_upsert_job_posts(rows: list[dict]) -> list[dict]:
     headers = dict(HEADERS_SUPABASE)
     headers["Prefer"] = "resolution=merge-duplicates,return=representation"
 
-    # ✅ ensure merge happens on job_posts.id
+    # ✅ merge on job_uid (your DB requires it and likely has UNIQUE constraint)
     params = {"on_conflict": "job_uid"}
 
     r = requests.post(url, headers=headers, params=params, json=rows, timeout=120)
@@ -173,35 +173,27 @@ def map_job_item_to_row(company: str, item: dict) -> dict:
         loc = ", ".join(parts) if parts else None
 
     now = datetime.now(timezone.utc).isoformat()
-return {
-    "id": uid,
-    "job_uid": uid,   # ✅ required by your DB (NOT NULL)
-    "company": company,
-    "title": item.get("title") or "(no title)",
-    "location": loc,
-    "country": (countries[0] if countries else None),
-    "first_seen_at": now,
-    "last_seen_at": now,
-    "is_active": True,
+    return {
+        "id": uid,
+        "job_uid": uid,  # ✅ required by your DB (NOT NULL)
+        "company": company,
+        "title": item.get("title") or "(no title)",
+        "location": loc,
+        "country": (countries[0] if countries else None),
+        "first_seen_at": now,
+        "last_seen_at": now,
+        "is_active": True,
         # If your table has posted_at later, you can re-add it:
         # "posted_at": safe_dt(item.get("date_posted")),
         # If your table has metadata later, you can re-add it:
         # "metadata": {...},
     }
 
-mapped_rows = [map_job_item_to_row(company, it) for it in items]
-
-# ✅ Safety: ensure required column is always present
-for r in mapped_rows:
-    r.setdefault("job_uid", r["id"])
-
-print("Row keys check:", sorted(mapped_rows[0].keys()))
-
 
 def build_new_job_signal(company: str, job_row: dict) -> dict:
     title = job_row["title"]
     loc = job_row.get("location")
-    job_id = str(job_row[JOB_ID_COL])
+    job_id = str(job_row.get("job_uid") or job_row[JOB_ID_COL])
 
     return {
         "account_name": company,
@@ -274,6 +266,15 @@ def main():
         print(f"Fetched items: {len(items)}")
 
         mapped_rows = [map_job_item_to_row(company, it) for it in items]
+
+        # ✅ Safety: ensure required column is always present (DB requires NOT NULL)
+        for r in mapped_rows:
+            if "job_uid" not in r or not r["job_uid"]:
+                r["job_uid"] = r["id"]
+
+        # Debug: prove job_uid is present
+        print("Row keys check:", sorted(mapped_rows[0].keys()) if mapped_rows else [])
+
         upserted = supabase_upsert_job_posts(mapped_rows)
         total_jobs_upserted += len(upserted)
         print(f"Upserted rows: {len(upserted)}")
@@ -289,9 +290,6 @@ def main():
         for it in expired_items:
             jid = it.get("id")
             if jid is not None:
-                # These ids from Apify are NOT UUIDs; we can't use them directly.
-                # But your expired actor likely returns the same "id" that was used in seed above.
-                # We must regenerate the UUID using same seed logic:
                 job_url = it.get("url") or ""
                 seed = f"{company}::{jid or job_url}"
                 expired_ids.append(str(uuid.uuid5(uuid.NAMESPACE_URL, seed)))
