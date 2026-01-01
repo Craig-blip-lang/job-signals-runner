@@ -21,18 +21,14 @@ SUPABASE_SERVICE_KEY = env("SUPABASE_SERVICE_KEY")
 # ✅ job_posts primary key column name in Supabase
 JOB_ID_COL = "id"
 
-# Apify actors
+# Apify actors (we will NOT use EXPIRED_ACTOR anymore)
 CAREER_SITE_ACTOR = "fantastic-jobs~career-site-job-listing-api"
-EXPIRED_ACTOR = "fantastic-jobs~expired-jobs-api-for-career-site-job-listing-api"
 
 # Tune these
 TIME_RANGE = env("TIME_RANGE", "24h")  # "1h", "24h", "7d"
 MAX_JOBS_PER_COMPANY = int(env("MAX_JOBS", "500"))
 INCLUDE_AI = env("INCLUDE_AI", "false").lower() == "true"
 INCLUDE_LINKEDIN = env("INCLUDE_LINKEDIN", "false").lower() == "true"
-
-# ✅ Turn off paid expired actor by default (you can set USE_EXPIRED_ACTOR=true later)
-USE_EXPIRED_ACTOR = env("USE_EXPIRED_ACTOR", "false").lower() == "true"
 
 HEADERS_SUPABASE = {
     "apikey": SUPABASE_SERVICE_KEY,
@@ -58,7 +54,6 @@ def apify_run_sync_get_items(actor: str, actor_input: dict, timeout_s: int = 180
     r = requests.post(url, params=params, json=actor_input, timeout=timeout_s + 30)
 
     if not r.ok:
-        # Let caller decide how fatal it is (we raise)
         print("Apify call failed")
         print("Status code:", r.status_code)
         print("Actor:", actor)
@@ -99,7 +94,7 @@ def supabase_upsert_job_posts(rows: list[dict]) -> list[dict]:
     headers = dict(HEADERS_SUPABASE)
     headers["Prefer"] = "resolution=merge-duplicates,return=representation"
 
-    # ✅ Merge on PRIMARY KEY id (this column IS unique)
+    # ✅ Merge on PRIMARY KEY id (unique)
     params = {"on_conflict": JOB_ID_COL}
 
     r = requests.post(url, headers=headers, params=params, json=rows, timeout=120)
@@ -115,10 +110,6 @@ def supabase_upsert_job_posts(rows: list[dict]) -> list[dict]:
 
 
 def _extract_missing_column_name(resp_text: str) -> str | None:
-    """
-    Supabase/PostgREST missing column error typically:
-    {"message":"Could not find the 'account_name' column of 'signals' in the schema cache"}
-    """
     marker = "Could not find the '"
     if marker in resp_text:
         after = resp_text.split(marker, 1)[1]
@@ -135,9 +126,9 @@ def _prune_rows(rows: list[dict], drop_key: str) -> list[dict]:
 
 def supabase_insert_signals(rows: list[dict]) -> None:
     """
-    Inserts signals but is resilient to schema mismatches by:
-    - Dropping unknown columns when PostgREST says a column doesn't exist (PGRST204).
-    This lets the run finish even if signals table schema differs.
+    Best-effort insert:
+    - If a column doesn't exist in your signals table, we drop it and retry.
+    - If it still fails, we print a warning but DO NOT break the run.
     """
     if not rows:
         return
@@ -147,33 +138,18 @@ def supabase_insert_signals(rows: list[dict]) -> None:
     headers["Prefer"] = "return=minimal"
 
     working = rows
-    for attempt in range(0, 8):  # up to 8 schema-prune retries
+    for _attempt in range(0, 10):
         r = requests.post(url, headers=headers, json=working, timeout=120)
         if r.ok:
             return
 
         text = r.text or ""
-        # Try to auto-fix missing columns
         missing_col = _extract_missing_column_name(text)
         if missing_col:
             print(f"Signal insert: dropping missing column '{missing_col}' and retrying...")
             working = _prune_rows(working, missing_col)
             continue
 
-        # If invalid uuid for some sent id-like field, drop obvious ones
-        if "invalid input syntax for type uuid" in text:
-            for candidate in ["id", "account_id", "signal_id"]:
-                if any(candidate in row for row in working):
-                    print(f"Signal insert: dropping '{candidate}' due to uuid error and retrying...")
-                    working = _prune_rows(working, candidate)
-                    break
-            else:
-                # nothing to drop
-                print("Signal insert warning (uuid error):", text[:500])
-                return
-            continue
-
-        # If still failing (400/409 etc), don't kill the whole job run
         print("Signal insert warning:", text[:800])
         return
 
@@ -204,16 +180,11 @@ def safe_dt(s: str | None) -> str | None:
         return None
 
 
-def fallback_uid(company: str, job_url: str) -> str:
-    raw = f"{company}::{job_url}".encode("utf-8")
-    return hashlib.sha256(raw).hexdigest()
-
-
 def map_job_item_to_row(company: str, item: dict) -> dict:
     job_id = item.get("id")
     job_url = item.get("url") or ""
 
-    # ✅ Stable UUID (Supabase job_posts.id is uuid)
+    # ✅ Stable UUID (matches across runs)
     seed = f"{company}::{job_id or job_url}"
     uid = str(uuid.uuid5(uuid.NAMESPACE_URL, seed))
 
@@ -246,12 +217,12 @@ def build_new_job_signal(company: str, job_row: dict) -> dict:
     loc = job_row.get("location")
     job_id = str(job_row.get("job_uid") or job_row[JOB_ID_COL])
 
-    # We include a few common fields; unknown ones will be auto-dropped by supabase_insert_signals
+    # We'll send a few common fields; unknown columns get dropped automatically.
     return {
-        "account_name": company,     # may not exist (auto-dropped)
-        "company": company,          # may exist in your schema
-        "signal_type": "NEW_JOB",    # may not exist (auto-dropped)
-        "type": "NEW_JOB",           # may exist instead of signal_type
+        "account_name": company,   # may not exist
+        "company": company,        # may exist
+        "signal_type": "NEW_JOB",  # may not exist
+        "type": "NEW_JOB",         # may exist
         "title": f"{company} posted: {title}" + (f" ({loc})" if loc else ""),
         "occurred_at": datetime.now(timezone.utc).isoformat(),
         "strength_score": 40,
@@ -264,11 +235,11 @@ def build_new_job_signal(company: str, job_row: dict) -> dict:
 def build_removed_job_signal(company: str, job_id: str) -> dict:
     job_id = str(job_id)
     return {
-        "account_name": company,      # may not exist (auto-dropped)
-        "company": company,           # may exist
-        "signal_type": "JOB_REMOVED", # may not exist (auto-dropped)
-        "type": "JOB_REMOVED",        # may exist instead
-        "title": f"{company} job removed/expired: {job_id}",
+        "account_name": company,        # may not exist
+        "company": company,             # may exist
+        "signal_type": "JOB_REMOVED",   # may not exist
+        "type": "JOB_REMOVED",          # may exist
+        "title": f"{company} job removed: {job_id}",
         "occurred_at": datetime.now(timezone.utc).isoformat(),
         "strength_score": 25,
         "source_url": None,
@@ -293,15 +264,6 @@ def fetch_new_jobs_for_company(company: str) -> list[dict]:
     return apify_run_sync_get_items(CAREER_SITE_ACTOR, actor_input)
 
 
-def fetch_expired_jobs_for_company(company: str) -> list[dict]:
-    actor_input = {
-        "organizationSearch": [company],  # ✅ MUST be an array
-        "timeRange": TIME_RANGE,
-        "maximumJobs": MAX_JOBS_PER_COMPANY,
-    }
-    return apify_run_sync_get_items(EXPIRED_ACTOR, actor_input)
-
-
 def main():
     ensure_env()
     companies = load_companies()
@@ -315,27 +277,28 @@ def main():
     for company in companies:
         print(f"\n=== {company} ===")
 
+        # What was active before
         existing_active = supabase_get_active_job_uids(company)
         print(f"Existing active jobs: {len(existing_active)}")
 
+        # What we see now
         items = fetch_new_jobs_for_company(company)
         print(f"Fetched items: {len(items)}")
 
         mapped_rows = [map_job_item_to_row(company, it) for it in items]
 
-        # ✅ Safety: ensure required column is always present (DB requires NOT NULL)
+        # Safety: job_uid must exist
         for r in mapped_rows:
             if "job_uid" not in r or not r["job_uid"]:
                 r["job_uid"] = r["id"]
 
-        # Debug: prove job_uid is present
         print("Row keys check:", sorted(mapped_rows[0].keys()) if mapped_rows else [])
 
         upserted = supabase_upsert_job_posts(mapped_rows)
         total_jobs_upserted += len(upserted)
         print(f"Upserted rows: {len(upserted)}")
 
-        # NEW_JOB signals: rows that weren't active before
+        # NEW jobs = in today's fetch but not previously active
         current_ids = {str(r[JOB_ID_COL]) for r in mapped_rows}
         new_rows = [r for r in mapped_rows if str(r[JOB_ID_COL]) not in existing_active]
         new_signals = [build_new_job_signal(company, r) for r in new_rows]
@@ -343,8 +306,7 @@ def main():
         total_new_signals += len(new_signals)
         print(f"NEW_JOB signals: {len(new_signals)}")
 
-        # ✅ JOB_REMOVED without paying for the expired actor:
-        # Anything that *was* active but is *not* in today's fetch => mark inactive + signal
+        # REMOVED jobs (free method) = previously active but missing today
         removed_ids = sorted(existing_active - current_ids)
         if removed_ids:
             BATCH = 200
@@ -354,37 +316,9 @@ def main():
                 removed_signals = [build_removed_job_signal(company, jid) for jid in chunk]
                 supabase_insert_signals(removed_signals)
                 total_removed_signals += len(removed_signals)
-            print(f"Removed jobs processed (diff method): {len(removed_ids)} (JOB_REMOVED signals created)")
+            print(f"JOB_REMOVED signals: {len(removed_ids)}")
         else:
-            print("Removed jobs processed (diff method): 0")
-
-        # Optional: if you rent the actor later, you can turn it on via USE_EXPIRED_ACTOR=true
-        if USE_EXPIRED_ACTOR:
-            try:
-                expired_items = fetch_expired_jobs_for_company(company)
-                expired_ids = []
-                for it in expired_items:
-                    jid = it.get("id")
-                    if jid is not None:
-                        job_url = it.get("url") or ""
-                        seed = f"{company}::{jid or job_url}"
-                        expired_ids.append(str(uuid.uuid5(uuid.NAMESPACE_URL, seed)))
-                expired_ids = sorted(set(expired_ids))
-
-                if expired_ids:
-                    BATCH = 200
-                    for i in range(0, len(expired_ids), BATCH):
-                        chunk = expired_ids[i : i + BATCH]
-                        supabase_mark_inactive(company, chunk)
-                        removed_signals = [build_removed_job_signal(company, uid) for uid in chunk]
-                        supabase_insert_signals(removed_signals)
-                        total_removed_signals += len(removed_signals)
-                    print(f"Expired jobs processed (actor): {len(expired_ids)} (JOB_REMOVED signals created)")
-                else:
-                    print("Expired jobs processed (actor): 0")
-            except requests.HTTPError as e:
-                # Don't kill the run if actor is paid / forbidden
-                print("Skipping expired actor due to error:", str(e)[:250])
+            print("JOB_REMOVED signals: 0")
 
         time.sleep(1.2)
 
