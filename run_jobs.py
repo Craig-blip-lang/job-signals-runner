@@ -96,7 +96,7 @@ def supabase_upsert_job_posts(rows: list[dict]) -> list[dict]:
     headers["Prefer"] = "resolution=merge-duplicates,return=representation"
 
     # ✅ ensure merge happens on job_posts.id
-    params = {"on_conflict": JOB_ID_COL}
+    params = {"on_conflict": "job_uid"}
 
     r = requests.post(url, headers=headers, params=params, json=rows, timeout=120)
 
@@ -188,6 +188,14 @@ return {
         # If your table has metadata later, you can re-add it:
         # "metadata": {...},
     }
+
+mapped_rows = [map_job_item_to_row(company, it) for it in items]
+
+# ✅ Safety: ensure required column is always present
+for r in mapped_rows:
+    r.setdefault("job_uid", r["id"])
+
+print("Row keys check:", sorted(mapped_rows[0].keys()))
 
 
 def build_new_job_signal(company: str, job_row: dict) -> dict:
