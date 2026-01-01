@@ -51,9 +51,20 @@ def ensure_env():
 def apify_run_sync_get_items(actor: str, actor_input: dict, timeout_s: int = 180) -> list:
     url = f"https://api.apify.com/v2/acts/{actor}/run-sync-get-dataset-items"
     params = {"token": APIFY_TOKEN, "timeout": str(timeout_s)}
+
     r = requests.post(url, params=params, json=actor_input, timeout=timeout_s + 30)
-    r.raise_for_status()
+
+    if not r.ok:
+        print("Apify call failed")
+        print("Status code:", r.status_code)
+        print("Actor:", actor)
+        print("Request URL:", r.url)
+        print("Input sent:", actor_input)
+        print("Response body:", r.text[:2000])
+        r.raise_for_status()
+
     return r.json()
+
 
 
 def supabase_get_active_job_uids(company: str) -> set[str]:
